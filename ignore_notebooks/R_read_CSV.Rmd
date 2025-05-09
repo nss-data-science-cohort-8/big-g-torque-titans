@@ -1,0 +1,106 @@
+---
+title: "ARIMA Demonstration"
+output: html_notebook
+---
+```{r}
+library(forecast)
+library(tidyverse)
+
+TimeToSPN5246_GroupedByTrucks <- read_csv("../data/Merged_FullDataSet_withDummyColumns_y_TimeIntervalClass_byTruck.csv")
+
+```
+
+```{r}
+
+
+#Use data before the cutoff year to fit the model
+cutoff_year = 2010 
+model_country = "United States"
+
+gdp_le <- read_csv("../data/gdp_le.csv")
+model_tib <- gdp_le |> 
+  filter(Country == model_country) |> 
+  arrange(Year) |> 
+  filter(Year < cutoff_year)
+```
+
+We need to convert the variables to time series objects.
+```{r}
+life_exp_ts <- ts(model_tib$Life_Expectancy, start = min(model_tib$Year), frequency = 1)
+gdp_ts <- ts(model_tib$GDP_Per_Capita, start = min(model_tib$Year), frequency = 1)
+```
+
+Then, we can use the auto.arima function from the forecast library to fit an arima model.
+For the US, it uses one autoregressive term. This means that it is using the prior year's life expectancy as a predictor for this year's value.
+```{r}
+gdp_model <- auto.arima(
+  life_exp_ts, 
+  xreg = log(gdp_ts)
+)
+
+summary(gdp_model)
+```
+
+If we want to test for statistical significance, we can use the coeftest function from the lmtest library.
+```{r}
+library(lmtest)
+
+coeftest(gdp_model)
+```
+
+Let's see how well it forecasts for future years. Because of the big dropoff in life expectancy for 2020, we'll only look at years before 2020.
+```{r}
+future_gdp <- gdp_le |> 
+  filter(Country == model_country) |> 
+  arrange(Year) |> 
+  filter(Year >= cutoff_year) |> 
+  filter(Year < 2020) |> 
+  pull(GDP_Per_Capita)
+forecasted_values <- forecast(gdp_model, 
+                              xreg = log(future_gdp)
+                              )
+
+
+Year = seq(max(model_tib$Year) + 1, max(model_tib$Year) + length(future_gdp))
+print(Year)
+print(length(future_gdp))
+```
+
+
+Let's plot the actual (solid line) vs. the forecasted (dashed line). This also includes the 80% and 95% confidence intervals for the forecasted values.
+```{r}
+forecast_tib <- tibble(
+  Year = seq(max(model_tib$Year) + 1, max(model_tib$Year) + length(future_gdp)),
+  LifeExp_Pred = forecasted_values$mean,
+  Lower_80 = forecasted_values$lower[,1],
+  Upper_80 = forecasted_values$upper[,1],
+  Lower_95 = forecasted_values$lower[,2],
+  Upper_95 = forecasted_values$upper[,2]
+)
+
+ggplot() +
+  geom_line(data = gdp_le |> 
+              filter(Country == model_country) |> 
+              filter(Year < 2020), 
+            aes(x = Year, y = Life_Expectancy)
+            ) +
+  geom_line(data = forecast_tib, 
+            aes(x = Year, y = LifeExp_Pred), 
+            linetype = "dashed") +
+  geom_ribbon(data = forecast_tib, 
+              aes(x = Year, ymin = Lower_95, ymax = Upper_95), 
+              alpha = 0.5,
+              fill = "gray80") +
+  geom_ribbon(data = forecast_tib, 
+              aes(x = Year, ymin = Lower_80, ymax = Upper_80),
+              alpha = 0.5,
+              fill = "gray60")
+
+```
+
+```{r}
+
+forecast_tib
+
+
+```
